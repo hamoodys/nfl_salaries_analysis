@@ -1,0 +1,266 @@
+# 
+
+#clearing memory, changing working directory and reading file
+rm(list=ls())
+setwd("C:/Users/Hamoody/Desktop/SDSU/Spring 22/Data Analytics/Project")
+getwd()
+data = read.csv('football_salaries.csv')
+head(data)
+data = na.omit(data)
+
+#Needed libraries 
+
+
+library(caret)
+library(tree)
+library(randomForest)
+library(dplyr)
+library(glmnet)
+library(pROC)
+library(leaps)
+
+
+
+# look at the covariances of total_value, total_guaranteed, fully_guaranteed vs avg_year 
+
+cov(data$total_value, data$avg_year)
+cov(data$total_guaranteed, data$avg_year)
+cov(data$total_guaranteed/data$total_value, data$avg_year)
+cov(data$total_guaranteed, data$fully_guaranteed)
+cor(data$total_value, data$avg_year)
+cor(data$total_guaranteed, data$avg_year)
+cor(data$total_guaranteed/data$total_value, data$avg_year)
+cor(data$total_guaranteed, data$fully_guaranteed)
+
+
+# We decided to drop fully_guaranteed and total_guaranteed variables because they are very closely correlated with avg (multicolinearity ???)
+# We also decided to drop player name because that is a unique identifier that offers no explanatory power
+# We also decided to transform/ combine total_value and total_guaranteed by diving total_guaranteed/data$total_value to get ___________
+data$roi = data$total_guaranteed/data$total_value
+predictors = data.frame(data$position, data$team, data$age, data$free_agency, data$roi) # change total_value to include the ratio of income/value
+response = data$avg_year
+
+sum(data$total_guaranteed == 0) #many (about 1959 observations) of the roi values in the roi column are zero because the corresponding total_guaranteed values  are also zero
+
+
+
+#exploring the correlations through visual graphs 
+
+pairs(~ response + data.age + data.roi, data= predictors )
+
+
+#investigating the age data and potential practically impossible outliers
+
+nrow(predictors[predictors$data.age>42, ])
+sd(predictors$data.age)
+IQR = IQR(predictors$data.age)
+IQR
+median = median(predictors$data.age, na.rm = FALSE)
+median
+Q1 = quantile(predictors$data.age, 0.25)
+Q1
+Q3 = quantile(predictors$data.age, 0.75)
+Q3
+lower_cutoff = Q1 - (1.5 * IQR)
+upper_cutoff = Q3 + (1.5 * IQR)
+lower_cutoff
+upper_cutoff
+nrow(predictors[predictors$data.age>34, ])
+sd(predictors$data.age >= 18 & predictors$data.age <= 34)
+
+
+condensed_data = subset(data, age <= 34 & age >= 18)
+condensed_data
+pairs(~ avg_year + age + total_value + roi, data= condensed_data )
+
+
+summary(condensed_data)
+
+condensed_data[7:8] <- list(NULL)  # drop fully_guaranteed and total_guaranteed because they are correlated with avg_year (to prevent data leakage) and with total_value (to prevent multicollinearity)
+condensed_data[2] <- list(NULL)    # drop player_name because it has no explanatory power
+condensed_data[4] <- list(NULL)    # drop ______something_____
+
+#histogram before log transformation
+hist(condensed_data$avg_year)
+summary(condensed_data$avg_year)
+#dropping the rows where salary = 0
+condensed_data = condensed_data[!(condensed_data$avg_year==0),] # drop rows when avg_year (yearly salary ) is equal to zero
+condensed_data$avg_year = log(condensed_data$avg_year)
+
+summary(condensed_data)
+
+hist(log(condensed_data$avg_year)) #using a log transformation really helps with salaries 
+
+condensed_data %>% summarise_if(is.numeric, sd)
+
+
+#how many factors
+nlevels(as.factor(condensed_data$team))
+nlevels(as.factor(condensed_data$free_agency))
+nlevels(as.factor(condensed_data$position))
+
+#frequency of the levels
+table(as.factor(condensed_data$team))
+table(as.factor(condensed_data$free_agency))
+table(as.factor(condensed_data$position))
+
+#correlations for quant variables 
+cor(condensed_data[, unlist(lapply(condensed_data, is.numeric))]) 
+
+
+set.seed(420)
+train.index=sample(4456, round(0.7*4456)) 
+
+#sample will randomly choose 70% of the data as training and 30% as testing.  
+train= condensed_data[train.index,]
+test= condensed_data[-train.index,]
+
+## Fit a linear model using least squares method on the training set, and report the test error obtained.
+#regsubset is not recommended because not many variables
+
+
+lm0= lm(avg_year ~ position+ age + free_agency + roi, data=train)
+lm1 = lm(avg_year ~ age + free_agency + roi + position, data=train)
+
+summary(lm0)
+summary(lm1) 
+
+
+lm0.pred= predict(lm1, newdata=test)
+lm1.pred= predict(lm1, newdata=test)
+
+#create scatterplot of data
+plot(train$age, train$avg_year)
+
+
+
+#test/prediction error
+mean(lm1$residuals^2)  #training error
+test.y= test$avg_year
+mean((lm1.pred - test.y)^2)   #test/prediction error which is 6.174477e+12 than the training error. The data set maybe 5.357041e+12.
+
+
+
+
+#look at individual variables t-test
+# why are levels of free agency significant post 2022 but not for pre 2022
+# age is highly significant
+# roi is highly significant
+# the F stat is highly significant for overall significance. The corresponding p-value is also highly significant
+#__________________________
+
+
+
+#Lasso - model selection - also not recommended because we don't have too many variables 
+
+
+
+#non-linear fitting is not expected to be appropriate because residuals are linear and independent
+plot(lm1$residuals)
+
+
+fit = lm(avg_year ~ poly(age, 4), data = condensed_data)  
+summary(fit)
+coef(summary(fit))
+
+fit2 = lm(avg_year ~ poly(roi, 4), data = condensed_data)  
+summary(fit2)
+coef(summary(fit2))
+
+fit3 = lm(avg_year ~ poly(age + roi, 4), data = condensed_data)  
+summary(fit3)
+coef(summary(fit3))
+
+## age on avg_year poly ##
+agelims = range(condensed_data$age)
+age.grid = seq(from = agelims[1], to = agelims[2])
+preds = predict(fit, newdata = list(age = age.grid), se = TRUE)
+se.bands = cbind(preds$fit + 2 * preds$se.fit, preds$fit - 2 * preds$se.fit)   # 95% confidence band
+
+par(mfrow = c(1, 2), mar = c(4.5, 4.5, 1, 1),oma = c(0, 0, 4, 0))
+plot(condensed_data$age, condensed_data$avg_year, xlim = agelims, cex = .5, col = "darkgrey")
+title("Age Polynomial", outer = T)
+lines(age.grid, preds$fit, lwd = 2, col = "blue")
+matlines(age.grid, se.bands, lwd = 1, col = "blue", lty = 3)
+dim(se.bands)
+age.grid
+
+## ROI on avg_year poly ##
+roilims = range(condensed_data$roi)
+roilims
+roi.grid = seq(from = 0, to = 1)
+preds2 = predict(fit2, newdata = list(roi = roi.grid), se = TRUE)
+
+se.bands = cbind(preds2$fit + 2 * preds2$se.fit, preds2$fit - 2 * preds2$se.fit)   # 95% confidence band
+se.bands
+par(mfrow = c(1, 2), mar = c(4.5, 4.5, 1, 1),oma = c(0, 0, 4, 0))
+plot(condensed_data$roi, condensed_data$avg_year, xlim = roilims, cex = .5, col = "darkgrey")
+title("ROI Polynomial", outer = T)
+lines(roi.grid, preds2$fit2, lwd = 2, col = "blue")
+matlines(roi.grid, se.bands, lwd = 1, col = "blue", lty = 3)
+
+pred1 = predict(fit, newdata=condensed_data)
+pred2 = predict(fit2, newdata=condensed_data)
+pred3 = predict(fit3, newdata=condensed_data)
+plot(condensed_data$age, pred1, pred2, pred3, cex = .5, col = "darkgrey")
+title("Degree-4 Polynomialy", outer = T)  #create a title
+
+#Decision Tree
+tree = tree(test$avg_year~., data = test)
+summary(tree)
+plot(tree)
+text(tree, pretty = 0)
+tree
+#importance(tree)
+
+cv = cv.tree(tree, FUN = prune.tree)
+cv
+plot(cv$size, cv$dev, type='b')
+
+best1 = cv$size[which.min(cv$dev)]
+best1
+
+prune= prune.tree(tree, best=6)
+plot(prune)
+text(prune, pretty = 0)
+prune
+
+pred = predict(prune, newdata = test) #what is meant here by NA's introduced by coercion
+head(data.frame(test$age, test$avg_year))
+head(test)
+head(yhat)
+
+mean((test.y-pred)^2)
+
+head(condensed_data)
+#Random Forest
+
+set.seed(420)
+rf= randomForest(condensed_data$avg_year~., data = condensed_data, mtry = 5, importance = TRUE)
+yhat.rf = predict(rf, newdata = test)
+mean((test.y- yhat.rf)^2)
+
+#pdf("pred5.pdf", width=4, height=4)
+plot(test.y, yhat.rf)
+abline(0, 1)
+#dev.off()
+
+importance(rf)
+
+#pdf("imp.pdf", width=8, height=4)
+varImpPlot(rf)
+
+#compare error rates, confusion matrix, size of tree, roc/auc
+
+
+
+# most important vars will show up in RF but they may be diff from lm
+# total guaranteed/total value either ways
+
+
+# mention that we dropped some vars ... done
+#log transform salary...done
+#remove when salary is 0 .... done
+#why are some roi's 0.... because there are many zero total_guaranteed datapoints
+#only look at adjr
+#combine free agency and positions by category UFA RFA...no meaningful way to combine the data

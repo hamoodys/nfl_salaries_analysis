@@ -2,7 +2,7 @@
 
 #clearing memory, changing working directory and reading file
 rm(list=ls())
-setwd("C:/Users/Hamoody/Desktop/SDSU/Spring 22/Data Analytics/Project")
+setwd("_______")
 getwd()
 data = read.csv('football_salaries.csv')
 head(data)
